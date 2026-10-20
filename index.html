@@ -70,6 +70,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <div class="row">
     <input id="q" inputmode="numeric" enterkeyhint="search" placeholder="JAN" autocomplete="off">
     <button class="btn main" id="camBtn" type="button">読む</button>
+    <button class="btn" id="micBtn" type="button" aria-label="音声入力">音声</button>
   </div>
   <p class="status" id="status"></p>
 
@@ -144,33 +145,105 @@ function card(r) {
   </article>`;
 }
 function show(q) {
-  if (!rows.length) { status("データ読込から在庫ファイルを入れてください", true); return; }
+  if (!rows.length) { status("データ読込から在庫ファイルを入れてください", true); return false; }
   const hits = find(q);
-  if (!hits.length) { $("result").innerHTML = ""; status(`${q} 該当なし`, true); return; }
-  if (hits.length === 1) { $("result").innerHTML = card(hits[0]); status(""); return; }
+  if (!hits.length) { $("result").innerHTML = ""; status(`${q} 該当なし`, true); return false; }
+  if (hits.length === 1) { $("result").innerHTML = card(hits[0]); status(""); return true; }
   const jk = janKey();
   $("result").innerHTML = `<div class="list">${hits.slice(0, 50).map((r, i) =>
     `<button class="btn hit" data-i="${i}" type="button"><span>${esc(r["商品名"] || "")}</span><span>${esc(r[jk])}</span></button>`).join("")}</div>`;
   $("result").querySelectorAll(".hit").forEach(b => b.onclick = () => { $("result").innerHTML = card(hits[+b.dataset.i]); });
   status(`${hits.length}件`);
+  return true;
 }
+$("q").onfocus = unlockSound;
 $("q").onkeydown = e => { if (e.key === "Enter") { show($("q").value); $("q").blur(); } };
 
-/* ---- カメラ連続読み取り ---- */
-let stream = null, timer = null, last = "", lastAt = 0;
+/* ---- 音 ---- */
+let ac = null;
+function unlockSound() {
+  try { ac = ac || new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === "suspended") ac.resume(); } catch (e) {}
+}
+function beep(ok) {
+  if (!ac) return;
+  try {
+    const tones = ok ? [[1760, 0, 0.09]] : [[440, 0, 0.12], [330, 0.15, 0.18]];
+    for (const [f, at, len] of tones) {
+      const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + at;
+      o.type = "square"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.15, t); g.gain.exponentialRampToValueAtTime(0.001, t + len);
+      o.connect(g).connect(ac.destination); o.start(t); o.stop(t + len);
+    }
+  } catch (e) {}
+  try { navigator.vibrate && navigator.vibrate(ok ? 60 : [60, 60, 60]); } catch (e) {}
+}
+
+/* ---- JANの検査 ---- */
+function eanOk(s) {
+  if (!/^(\d{8}|\d{12}|\d{13})$/.test(s)) return false;
+  const d = s.split("").map(Number), c = d.pop();
+  let sum = 0; d.reverse().forEach((x, i) => sum += x * (i % 2 === 0 ? 3 : 1));
+  return (10 - sum % 10) % 10 === c;
+}
+function inData(code) {
+  const z = code.replace(/^0+/, ""), jk = janKey();
+  return rows.some(r => digits(r[jk]).replace(/^0+/, "") === z);
+}
+
+/* ---- カメラ連続読み取り(バーコード+数字) ---- */
+let stream = null, timer = null, ocrOn = false, last = "", lastAt = 0;
 function hit(code) {
   const now = Date.now();
   if (code === last && now - lastAt < 2500) return;
   last = code; lastAt = now;
-  $("q").value = code; show(code);
-  try { navigator.vibrate && navigator.vibrate(60); } catch (e) {}
+  $("q").value = code; beep(show(code));
 }
+function grabBand(v, c, scale) {
+  const w = v.videoWidth, h = v.videoHeight; if (!w) return false;
+  const ch = Math.round(h * 0.5), cy = Math.round((h - ch) / 2);   // 中央の帯だけ読む
+  c.width = Math.round(w * scale); c.height = Math.round(ch * scale);
+  c.getContext("2d", { willReadFrequently: true }).drawImage(v, 0, cy, w, ch, 0, 0, c.width, c.height);
+  return true;
+}
+
+/* 数字(バーコード下の印字)を読む */
+let ocrWorker = null, ocrLoading = null;
+function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
+async function getOcr() {
+  if (ocrWorker) return ocrWorker;
+  if (!ocrLoading) ocrLoading = (async () => {
+    if (!window.Tesseract) await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+    const w = await Tesseract.createWorker("eng");
+    await w.setParameters({ tessedit_char_whitelist: "0123456789", tessedit_pageseg_mode: "6" });
+    ocrWorker = w; return w;
+  })().catch(e => { ocrLoading = null; throw e; });
+  return ocrLoading;
+}
+function pickJan(text) {
+  const runs = (text.match(/[0-9 ]+/g) || []).map(t => t.replace(/ /g, ""));
+  const cands = [];
+  for (const r of runs) for (const n of [13, 8]) for (let i = 0; i + n <= r.length; i++) { const s = r.substr(i, n); if (eanOk(s)) cands.push(s); }
+  return cands.find(inData) || null;
+}
+async function ocrLoop(v) {
+  let w; try { w = await getOcr(); } catch (e) { return; }
+  const c = document.createElement("canvas");
+  while (stream && ocrOn) {
+    if (grabBand(v, c, Math.min(1, 900 / (v.videoWidth || 900)))) {
+      try { const { data } = await w.recognize(c); const code = pickJan(data.text); if (code) hit(code); } catch (e) {}
+    }
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
 async function startCam() {
+  unlockSound();
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
   } catch (e) { status("カメラを使えません。設定でカメラを許可してください", true); stream = null; return; }
   const v = $("video"); v.srcObject = stream; try { await v.play(); } catch (e) {}
   $("cam").hidden = false; $("camBtn").textContent = "停止";
+  ocrOn = true; ocrLoop(v);
   let det = null;
   if ("BarcodeDetector" in window) { try { det = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "itf", "code_128"] }); } catch (e) {} }
   if (det) {
@@ -181,13 +254,10 @@ async function startCam() {
   hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.CODE_128]);
   hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
   const reader = new ZXing.MultiFormatReader(); reader.setHints(hints);
-  const c = document.createElement("canvas"), ctx = c.getContext("2d", { willReadFrequently: true });
+  const c = document.createElement("canvas");
   const loop = () => {
     if (!stream) return;
-    const w = v.videoWidth, h = v.videoHeight;
-    if (w) {
-      const ch = Math.round(h * 0.5), cy = Math.round((h - ch) / 2);   // 中央の帯だけ読む
-      c.width = w; c.height = ch; ctx.drawImage(v, 0, cy, w, ch, 0, 0, w, ch);
+    if (grabBand(v, c, 1)) {
       try { const r = reader.decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)))); hit(r.getText()); } catch (e) {}
     }
     timer = setTimeout(loop, 120);
@@ -195,12 +265,40 @@ async function startCam() {
   loop();
 }
 function stopCam() {
-  clearTimeout(timer);
+  clearTimeout(timer); ocrOn = false;
   if (stream) stream.getTracks().forEach(t => t.stop());
   stream = null; $("cam").hidden = true; $("camBtn").textContent = "読む";
 }
 $("camBtn").onclick = () => stream ? stopCam() : startCam();
-document.addEventListener("visibilitychange", () => { if (document.hidden && stream) stopCam(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { if (stream) stopCam(); if (rec) rec.stop(); } });
+
+/* ---- 音声入力 ---- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+function spokenToQuery(t) {
+  const k = { "〇": "0", "零": "0", "ゼロ": "0", "まる": "0", "一": "1", "いち": "1", "二": "2", "に": "2", "三": "3", "さん": "3", "四": "4", "よん": "4", "し": "4", "五": "5", "ご": "5", "六": "6", "ろく": "6", "七": "7", "なな": "7", "しち": "7", "八": "8", "はち": "8", "九": "9", "きゅう": "9", "く": "9" };
+  const n = t.normalize("NFKC").replace(/[\s、。,.\-ー]/g, "");
+  if (/^[0-9]+$/.test(n)) return n;
+  let out = "", rest = n;
+  const keys = Object.keys(k).sort((a, b) => b.length - a.length);
+  while (rest) { const m = keys.find(x => rest.startsWith(x)); if (m) { out += k[m]; rest = rest.slice(m.length); } else if (/^[0-9]/.test(rest)) { out += rest[0]; rest = rest.slice(1); } else { out = null; break; } }
+  return out && out.length >= 4 ? out : t.trim();
+}
+$("micBtn").onclick = () => {
+  unlockSound();
+  if (!SR) { $("q").focus(); status("キーボードのマイクで話してください"); return; }
+  if (rec) { rec.stop(); return; }
+  rec = new SR(); rec.lang = "ja-JP"; rec.interimResults = true; rec.maxAlternatives = 1;
+  $("micBtn").classList.add("main"); status("話してください");
+  rec.onresult = e => {
+    const r = e.results[e.results.length - 1], t = r[0].transcript;
+    $("q").value = t;
+    if (r.isFinal) { const q = spokenToQuery(t); $("q").value = q; beep(show(q)); }
+  };
+  rec.onerror = e => { if (e.error === "not-allowed" || e.error === "service-not-allowed") status("マイクを使えません。設定でマイクと音声認識を許可してください", true); };
+  rec.onend = () => { rec = null; $("micBtn").classList.remove("main"); if ($("status").textContent === "話してください") status(""); };
+  try { rec.start(); } catch (e) { rec = null; $("micBtn").classList.remove("main"); }
+};
 
 /* ---- データ読込 ---- */
 $("pick").onclick = () => $("file").click();
