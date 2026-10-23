@@ -77,11 +77,12 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   </div>
   <div class="okbar" id="okBanner" hidden>OK 話してください</div>
   <p class="status" id="status"></p>
+  <button class="btn" id="kbBtn" type="button" hidden>キーボードのマイクで話す</button>
 
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v1.4</span></span>
+    <span><span id="info"></span> <span id="ver">v1.6</span></span>
     <button class="btn" id="pick" type="button">データ読込</button>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
@@ -293,6 +294,14 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 function spokenToQuery(t) {
   const k = { "〇": "0", "零": "0", "ゼロ": "0", "まる": "0", "一": "1", "いち": "1", "二": "2", "に": "2", "三": "3", "さん": "3", "四": "4", "よん": "4", "し": "4", "五": "5", "ご": "5", "六": "6", "ろく": "6", "七": "7", "なな": "7", "しち": "7", "八": "8", "はち": "8", "九": "9", "きゅう": "9", "く": "9" };
+  // 英語の音声入力(USキーボード): "four five four zero ..." / "oh" / "double five"
+  const en = { zero: "0", oh: "0", o: "0", one: "1", two: "2", to: "2", too: "2", three: "3", four: "4", for: "4", five: "5", six: "6", seven: "7", eight: "8", ate: "8", nine: "9" };
+  const words = t.normalize("NFKC").toLowerCase().replace(/[,.\-]/g, " ").split(/\s+/).filter(Boolean);
+  if (words.length && words.every(w => /^[0-9]+$/.test(w) || en[w] || w === "double" || w === "triple")) {
+    let o = "", rep = 1;
+    for (const w of words) { if (w === "double") { rep = 2; continue; } if (w === "triple") { rep = 3; continue; } o += (en[w] || w).repeat(rep); rep = 1; }
+    if (o.length >= 4) return o;
+  }
   const n = t.normalize("NFKC").replace(/[\s、。,.\-ー]/g, "");
   if (/^[0-9]+$/.test(n)) return n;
   let out = "", rest = n;
@@ -326,30 +335,38 @@ let kbDict = false;
 $("micBtn").onclick = () => {
   unlockSound();
   if (rec) { rec.stop(); return; }
-  if (standalone || !SR) { keyboardDictation(); return; }
-  if (!SR) { okTone(); status("OK キーボードのマイクで話してください"); $("q").value = ""; $("q").focus(); return; }
+  if (!SR) { keyboardDictation(); return; }
+  // 日本語(ja-JP)で聞き取る。キーボードの言語には関係しない
   rec = new SR(); rec.lang = "ja-JP"; rec.interimResults = true; rec.maxAlternatives = 1;
-  let heard = false;
-  rec.onstart = () => { okTone(); micUi(true); status(""); };
+  let started = false;
+  const fail = msg => {
+    try { rec && rec.abort(); } catch (e) {}
+    rec = null; micUi(false);
+    status(msg + (standalone ? "。Safariで開くと使えます" : ""), true);
+    $("kbBtn").hidden = false;
+  };
+  const watchdog = setTimeout(() => { if (!started) fail("音声認識が始まりません"); }, 2000);
+  rec.onstart = () => { started = true; clearTimeout(watchdog); okTone(); micUi(true); status(""); $("kbBtn").hidden = true; };
   rec.onresult = e => {
-    heard = true;
     const r = e.results[e.results.length - 1], t = r[0].transcript;
     $("q").value = t;
     if (r.isFinal) { const q = spokenToQuery(t); $("q").value = q; beep(show(q)); }
   };
   rec.onerror = e => {
-    const msg = {
-      "not-allowed": "マイクが許可されていません。設定でSafariのマイクを許可してください",
-      "service-not-allowed": "音声認識が使えません。設定でSiriと音声入力をオンにしてください",
-      "no-speech": "声が聞き取れませんでした。もう一度押して話してください",
+    clearTimeout(watchdog);
+    if (e.error === "no-speech") { status("声が聞き取れませんでした。もう一度押して話してください", true); return; }
+    if (e.error === "aborted") return;
+    fail({
+      "not-allowed": "マイクが許可されていません",
+      "service-not-allowed": "この画面では音声認識が使えません",
       "audio-capture": "マイクが見つかりません",
       "network": "通信できないため音声認識が使えません"
-    }[e.error] || `音声認識エラー(${e.error})`;
-    status(msg, true);
+    }[e.error] || `音声認識エラー(${e.error})`);
   };
-  rec.onend = () => { rec = null; micUi(false); };
-  try { rec.start(); } catch (e) { rec = null; micUi(false); status("音声認識を開始できません。キーボードのマイクで話してください", true); $("q").focus(); }
+  rec.onend = () => { clearTimeout(watchdog); rec = null; micUi(false); };
+  try { rec.start(); } catch (e) { clearTimeout(watchdog); fail("音声認識を開始できません"); }
 };
+$("kbBtn").onclick = () => { $("kbBtn").hidden = true; status(""); keyboardDictation(); };
 
 /* ---- データ読込 ---- */
 $("pick").onclick = () => $("file").click();
