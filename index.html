@@ -81,7 +81,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span id="info"></span>
+    <span><span id="info"></span> <span id="ver">v1.3</span></span>
     <button class="btn" id="pick" type="button">データ読込</button>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
@@ -161,7 +161,19 @@ function show(q) {
   return true;
 }
 $("q").onfocus = unlockSound;
-$("q").onkeydown = e => { if (e.key === "Enter") { show($("q").value); $("q").blur(); } };
+let typeTimer = null;
+$("q").addEventListener("input", () => {
+  if (!kbDict) return;
+  clearTimeout(typeTimer);
+  typeTimer = setTimeout(() => {
+    const t = $("q").value; if (!t.trim()) return;
+    const q = spokenToQuery(t); $("q").value = q;
+    kbDict = false; $("okBanner").hidden = true;
+    beep(show(q)); $("q").blur();
+  }, 1200);
+});
+$("q").addEventListener("blur", () => { if (kbDict && !$("q").value.trim()) { kbDict = false; $("okBanner").hidden = true; } });
+$("q").onkeydown = e => { if (e.key === "Enter") { clearTimeout(typeTimer); kbDict = false; $("okBanner").hidden = true; const q = spokenToQuery($("q").value); $("q").value = q; beep(show(q)); $("q").blur(); } };
 
 /* ---- 音 ---- */
 let ac = null;
@@ -302,11 +314,19 @@ function okTone() {
 function micUi(on) {
   $("micBtn").classList.toggle("main", on);
   $("micBtn").textContent = on ? "OK" : "音声";
-  $("okBanner").hidden = !on;
+  $("okBanner").textContent = "OK 話してください"; $("okBanner").hidden = !on;
 }
+const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+function keyboardDictation() {
+  okTone(); $("q").value = ""; $("q").focus();
+  $("okBanner").textContent = "OK キーボードのマイクを押して話してください"; $("okBanner").hidden = false;
+  kbDict = true;
+}
+let kbDict = false;
 $("micBtn").onclick = () => {
   unlockSound();
   if (rec) { rec.stop(); return; }
+  if (standalone || !SR) { keyboardDictation(); return; }
   if (!SR) { okTone(); status("OK キーボードのマイクで話してください"); $("q").value = ""; $("q").focus(); return; }
   rec = new SR(); rec.lang = "ja-JP"; rec.interimResults = true; rec.maxAlternatives = 1;
   let heard = false;
