@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -78,7 +79,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 </style>
 </head>
 <body>
-<div class="lock" id="lock">
+<div class="lock" id="lock" hidden>
   <form class="lockbox" id="lockForm" autocomplete="off">
     <p class="locktitle" id="lockTitle">合言葉</p>
     <input id="pin" type="password" inputmode="numeric" autocomplete="off" enterkeyhint="go" aria-label="合言葉">
@@ -110,8 +111,8 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v2.2</span></span>
-    <span class="footbtns"><button class="btn" id="chgPin" type="button">合言葉変更</button> <button class="btn" id="pick" type="button">データ読込</button></span>
+    <span><span id="info"></span> <span id="ver">v2.4</span></span>
+    <span class="footbtns"><button class="btn" id="pick" type="button">データ読込</button></span>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
 </div>
@@ -363,8 +364,7 @@ let kbDict = false;
 $("micBtn").onclick = () => {
   unlockSound();
   if (rec) { rec.stop(); return; }
-  let srDead = false; try { srDead = localStorage.getItem("jan.srdead") === "1"; } catch (e) {}
-  if (standalone && (!SR || srDead)) { localVoice(); return; }
+  if (standalone) { keyboardDictation(); return; }   // ホーム画面アプリはキーボードのマイクで
   if (!SR) { keyboardDictation(); return; }
   // 日本語(ja-JP)で聞き取る。キーボードの言語には関係しない
   rec = new SR(); rec.lang = "ja-JP"; rec.interimResults = true; rec.maxAlternatives = 1;
@@ -487,7 +487,7 @@ async function localVoice() {
   }
 }
 // 一度準備した端末では、起動時に裏で読み込んでおく
-try { if (standalone && localStorage.getItem("jan.asr")) setTimeout(() => getAsr().catch(() => {}), 1500); } catch (e) {}
+
 
 /* ---- 消去ボタン ---- */
 const syncClr = () => { $("clrBtn").hidden = !$("q").value; };
@@ -548,10 +548,9 @@ $("wipe").onclick = async () => {
   rows = []; headers = []; $("info").textContent = ""; $("result").innerHTML = ""; pinHash = null;
   showLock("set");
 };
-$("chgPin").onclick = () => showLock("change");
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) hiddenAt = Date.now();
-  else if (pinHash && $("lock").hidden && hiddenAt && Date.now() - hiddenAt > LOCK_AFTER) showLock("open");
+  else if (false) showLock("open");
 });
 
 /* ---- 起動 ---- */
@@ -565,7 +564,7 @@ document.addEventListener("visibilitychange", () => {
     if (q0 && rows.length) { history.replaceState(null, "", location.pathname); bootRest = () => { unlockSound(); const q = spokenToQuery(q0); $("q").value = q; beep(show(q)); }; }
   } catch (e) {}
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
-  if (pinHash) showLock("open"); else showLock("set");
+  $("lock").hidden = true; if (bootRest) { const f = bootRest; bootRest = null; f(); }
 })();
 </script>
 </body>
