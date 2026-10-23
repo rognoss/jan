@@ -57,7 +57,8 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 .total{display:flex;align-items:baseline;gap:8px}
 .total .v{font:600 44px/1 var(--f-num);font-variant-numeric:tabular-nums}
 .total .lbl{color:var(--muted);font-size:13px}
-.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.grid .cell{box-shadow:inset -1px -1px 0 var(--line)}
 .cell{background:var(--surface);padding:8px 12px;display:flex;justify-content:space-between;gap:8px;align-items:baseline}
 .cell .k{font-size:12px;color:var(--muted)}
 .cell .v{font:600 16px var(--f-num);font-variant-numeric:tabular-nums;text-align:right;overflow-wrap:anywhere}
@@ -88,6 +89,55 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 .arow .aq{font:700 20px var(--f-num);font-variant-numeric:tabular-nums;text-align:right;min-width:3ch}
 @media (max-width:420px){.arow{grid-template-columns:minmax(0,1fr) auto}.arow .aj{grid-column:1/-1}}
 [hidden]{display:none!important}
+/* ---- 画面構成 ---- */
+.side{display:contents}
+#result{order:5}
+.foot{order:9}
+
+/* iPhone 縦 */
+@media (max-width:500px){
+  .wrap{gap:10px;padding-top:max(8px,env(safe-area-inset-top,0px))}
+  .row{gap:6px}
+  .row input{font-size:17px;padding:10px}
+  .btn{padding:10px 11px}
+  .card{padding:14px;gap:10px}
+  .name{font-size:19px}
+  .jan{font-size:17px}
+  .loc .v{font-size:clamp(36px,12vw,48px)}
+  .total .v{font-size:36px}
+  .cell{padding:7px 10px}
+  .cell .v{font-size:15px}
+  .areatitle{font-size:18px}
+  .arow{padding:9px 12px}
+}
+
+/* iPad 横 */
+@media (min-width:900px) and (orientation:landscape){
+  .wrap{max-width:none;display:grid;grid-template-columns:minmax(320px,38%) minmax(0,1fr);gap:20px;align-items:start;
+    padding-top:max(16px,env(safe-area-inset-top,0px));
+    padding-left:max(24px,env(safe-area-inset-left,0px));padding-right:max(24px,env(safe-area-inset-right,0px))}
+  .side{display:flex;flex-direction:column;gap:12px;position:sticky;top:max(16px,env(safe-area-inset-top,0px))}
+  .foot{order:0;margin-top:8px}
+  #result{order:0;min-width:0}
+  .cam{aspect-ratio:4/3}
+  .card{padding:22px 24px;gap:16px}
+  .name{font-size:28px}
+  .jan{font-size:22px}
+  .loc{padding:14px 18px}
+  .loc .v{font-size:72px}
+  .loc .tag{font-size:16px}
+  .total .v{font-size:56px}
+  .grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .cell{padding:10px 14px}
+  .cell .k{font-size:13px}
+  .cell .v{font-size:19px}
+  .areatitle{font-size:24px}
+  .arow{padding:12px 18px;font-size:17px}
+  .arow .aj{font-size:16px}
+  .arow .aq{font-size:24px}
+  .list .hit{font-size:17px;padding:12px 14px}
+}
+
 </style>
 </head>
 <body>
@@ -106,6 +156,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   </form>
 </div>
 <div class="wrap">
+ <div class="side">
   <div class="cam" id="cam" hidden><video id="video" playsinline muted autoplay></video></div>
 
   <div class="row">
@@ -120,12 +171,13 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <p class="status" id="status"></p>
   <button class="btn" id="kbBtn" type="button" hidden>キーボードのマイクで話す</button>
 
-  <section id="result"></section>
-
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v2.8</span></span>
+    <span><span id="info"></span> <span id="ver">v2.9</span></span>
     <span class="footbtns"><button class="btn" id="pick" type="button">データ読込</button></span>
   </div>
+ </div>
+
+  <section id="result"></section>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
 </div>
 
@@ -185,7 +237,7 @@ function card(r) {
   const shelf = r["棚番"] || "";
   const sm = shelf.match(/^(.*?)\[(.*)\]$/);
   const used = new Set([jk, "商品名", "棚番", "全在庫", "メーカー"]);
-  const cells = headers.filter(k => !used.has(k)).map(k =>
+  const cells = headers.filter(k => k && !used.has(k)).map(k =>
     `<div class="cell"><span class="k">${esc(k)}</span><span class="v${r[k] ? "" : " empty"}">${r[k] ? esc(r[k]) : "—"}</span></div>`).join("");
   return `<article class="card">
     <div><div class="jan">${esc(r[jk])}</div><h2 class="name">${esc(name)}</h2>${r["メーカー"] ? `<div class="maker">${esc(r["メーカー"])}</div>` : ""}</div>
