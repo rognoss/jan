@@ -66,10 +66,32 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 .hit span:last-child{font-family:var(--f-num);color:var(--muted)}
 .foot{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
 .foot .btn{font-size:13px;padding:6px 10px}
+.lock{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;align-items:center;justify-content:center;
+  padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.lockbox{width:100%;max-width:320px;display:flex;flex-direction:column;gap:12px}
+.locktitle{font-size:18px;font-weight:700;margin:0;text-align:center}
+.lockbox input{font:600 24px var(--f-num);letter-spacing:.3em;text-align:center;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}
+.lockmsg{font-size:13px;color:var(--warn);margin:0;min-height:1.2em;text-align:center}
+.linkbtn{background:none;border:0;color:var(--muted);font:13px var(--f-body);text-decoration:underline;cursor:pointer}
+.footbtns{display:flex;gap:6px}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
+<div class="lock" id="lock">
+  <form class="lockbox" id="lockForm" autocomplete="off">
+    <p class="locktitle" id="lockTitle">合言葉</p>
+    <input id="pin" type="password" inputmode="numeric" autocomplete="off" enterkeyhint="go" aria-label="合言葉">
+    <input id="pin2" type="password" inputmode="numeric" autocomplete="off" enterkeyhint="go" aria-label="合言葉(確認)" placeholder="もう一度" hidden>
+    <button class="btn main" id="lockGo" type="submit">開く</button>
+    <p class="lockmsg" id="lockMsg"></p>
+    <button class="linkbtn" id="forgot" type="button">合言葉を忘れた</button>
+    <div id="forgotBox" hidden>
+      <p class="lockmsg">合言葉を作り直すと、このiPadの在庫データも消えます。データ読込をやり直してください。</p>
+      <button class="btn" id="wipe" type="button">データを消して作り直す</button>
+    </div>
+  </form>
+</div>
 <div class="wrap">
   <div class="cam" id="cam" hidden><video id="video" playsinline muted autoplay></video></div>
 
@@ -88,8 +110,8 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v2.0</span></span>
-    <button class="btn" id="pick" type="button">データ読込</button>
+    <span><span id="info"></span> <span id="ver">v2.2</span></span>
+    <span class="footbtns"><button class="btn" id="chgPin" type="button">合言葉変更</button> <button class="btn" id="pick" type="button">データ読込</button></span>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
 </div>
@@ -489,11 +511,61 @@ $("file").onchange = async e => {
   setInfo(meta); $("result").innerHTML = ""; status(`${rows.length.toLocaleString()}件を読み込みました`);
 };
 
+/* ---- 合言葉ロック ---- */
+const LOCK_AFTER = 5 * 60 * 1000;   // 5分以上ほかのアプリにいたら、戻ったときに再ロック
+async function sha(t) {
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("jan:" + t));
+  return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, "0")).join("");
+}
+let pinHash = null, lockMode = "open", hiddenAt = 0, bootRest = null;
+function showLock(mode) {
+  lockMode = mode;
+  if (stream) stopCam();
+  $("lockTitle").textContent = mode === "set" ? "合言葉を決めてください(4けた以上の数字)" : mode === "change" ? "新しい合言葉(4けた以上の数字)" : "合言葉";
+  $("pin2").hidden = mode === "open"; $("lockGo").textContent = mode === "open" ? "開く" : "決める";
+  $("forgot").hidden = mode !== "open"; $("forgotBox").hidden = true;
+  $("pin").value = ""; $("pin2").value = ""; $("lockMsg").textContent = "";
+  $("lock").hidden = false; setTimeout(() => $("pin").focus(), 50);
+}
+function unlock() { $("lock").hidden = true; $("pin").blur(); if (bootRest) { const f = bootRest; bootRest = null; f(); } }
+$("lockForm").onsubmit = async e => {
+  e.preventDefault();
+  const p = $("pin").value.trim();
+  if (lockMode === "open") {
+    if (await sha(p) === pinHash) unlock();
+    else { $("lockMsg").textContent = "合言葉が違います"; $("pin").value = ""; }
+    return;
+  }
+  if (!/^[0-9]{4,}$/.test(p)) { $("lockMsg").textContent = "4けた以上の数字にしてください"; return; }
+  if (p !== $("pin2").value.trim()) { $("lockMsg").textContent = "2回の入力が一致しません"; $("pin2").value = ""; return; }
+  pinHash = await sha(p);
+  try { await db.set("pin", pinHash); } catch (er) {}
+  unlock(); status("合言葉を設定しました");
+};
+$("forgot").onclick = () => { $("forgotBox").hidden = false; };
+$("wipe").onclick = async () => {
+  try { await db.set("data", null); await db.set("pin", null); } catch (e) {}
+  rows = []; headers = []; $("info").textContent = ""; $("result").innerHTML = ""; pinHash = null;
+  showLock("set");
+};
+$("chgPin").onclick = () => showLock("change");
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) hiddenAt = Date.now();
+  else if (pinHash && $("lock").hidden && hiddenAt && Date.now() - hiddenAt > LOCK_AFTER) showLock("open");
+});
+
 /* ---- 起動 ---- */
 (async () => {
+  try { pinHash = await db.get("pin"); } catch (e) {}
   try { const d = await db.get("data"); if (d) { parse(d.text); setInfo(d.meta); } } catch (e) {}
   if (!rows.length) status("データ読込から在庫ファイルを入れてください");
+  // ショートカットから ?q=… で呼ばれたら、その言葉で検索
+  try {
+    const q0 = new URLSearchParams(location.search).get("q");
+    if (q0 && rows.length) { history.replaceState(null, "", location.pathname); bootRest = () => { unlockSound(); const q = spokenToQuery(q0); $("q").value = q; beep(show(q)); }; }
+  } catch (e) {}
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+  if (pinHash) showLock("open"); else showLock("set");
 })();
 </script>
 </body>
