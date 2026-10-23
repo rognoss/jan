@@ -81,7 +81,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v1.3</span></span>
+    <span><span id="info"></span> <span id="ver">v1.4</span></span>
     <button class="btn" id="pick" type="button">データ読込</button>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
@@ -172,7 +172,7 @@ $("q").addEventListener("input", () => {
     beep(show(q)); $("q").blur();
   }, 1200);
 });
-$("q").addEventListener("blur", () => { if (kbDict && !$("q").value.trim()) { kbDict = false; $("okBanner").hidden = true; } });
+$("q").addEventListener("blur", () => { $("q").setAttribute("inputmode", "numeric"); if (kbDict && !$("q").value.trim()) { kbDict = false; $("okBanner").hidden = true; } });
 $("q").onkeydown = e => { if (e.key === "Enter") { clearTimeout(typeTimer); kbDict = false; $("okBanner").hidden = true; const q = spokenToQuery($("q").value); $("q").value = q; beep(show(q)); $("q").blur(); } };
 
 /* ---- 音 ---- */
@@ -318,7 +318,7 @@ function micUi(on) {
 }
 const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 function keyboardDictation() {
-  okTone(); $("q").value = ""; $("q").focus();
+  okTone(); $("q").value = ""; $("q").blur(); $("q").setAttribute("inputmode", "text"); $("q").focus();
   $("okBanner").textContent = "OK キーボードのマイクを押して話してください"; $("okBanner").hidden = false;
   kbDict = true;
 }
