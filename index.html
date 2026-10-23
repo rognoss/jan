@@ -82,7 +82,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v1.7</span></span>
+    <span><span id="info"></span> <span id="ver">v1.8</span></span>
     <button class="btn" id="pick" type="button">データ読込</button>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
@@ -377,6 +377,7 @@ async function getAsr() {
   if (!asrLoading) asrLoading = (async () => {
     const T = await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2");
     T.env.allowLocalModels = false;
+    try { T.env.backends.onnx.wasm.numThreads = 1; T.env.backends.onnx.wasm.proxy = false; } catch (e) {}
     const prog = {};
     const p = await T.pipeline("automatic-speech-recognition", "Xenova/whisper-base", {
       progress_callback: e => {
@@ -396,10 +397,13 @@ async function toMono16k(chunks, rate) {
   const len = chunks.reduce((a, c) => a + c.length, 0), all = new Float32Array(len);
   let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
   if (rate === 16000) return all;
-  const oc = new OfflineAudioContext(1, Math.ceil(len * 16000 / rate), 16000);
-  const b = oc.createBuffer(1, len, rate); b.copyToChannel(all, 0);
-  const src = oc.createBufferSource(); src.buffer = b; src.connect(oc.destination); src.start();
-  return (await oc.startRendering()).getChannelData(0);
+  const r = rate / 16000, n = Math.floor(len / r), out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {           // 平均をとって間引く
+    const s0 = Math.floor(i * r), s1 = Math.min(len, Math.floor((i + 1) * r));
+    let sum = 0; for (let j = s0; j < s1; j++) sum += all[j];
+    out[i] = s1 > s0 ? sum / (s1 - s0) : all[s0];
+  }
+  return out;
 }
 async function localVoice() {
   if (vRec) { vRec.stop(); return; }
@@ -430,9 +434,12 @@ async function localVoice() {
   vRec = null; micUi(false);
   if (!spoke) { setBanner(""); status("声が聞き取れませんでした。もう一度押して話してください", true); return; }
   setBanner("文字にしています…");
+  let stage = "録音の変換";
   try {
     const audio = await toMono16k(chunks, ctx.sampleRate);
+    stage = "音声の準備(読み込み)";
     const p = await model;
+    stage = "文字への変換";
     setBanner("文字にしています…");
     const out = await p(audio, { language: "japanese", task: "transcribe" });
     setBanner("");
@@ -440,7 +447,8 @@ async function localVoice() {
     if (!t) { status("聞き取れませんでした。もう一度話してください", true); return; }
     const q = spokenToQuery(t); $("q").value = q; beep(show(q));
   } catch (e) {
-    setBanner(""); status("音声の準備に失敗しました。通信を確認してもう一度押してください", true); $("kbBtn").hidden = false;
+    setBanner(""); asrLoading = asr ? asrLoading : null;
+    status(`${stage}で失敗しました:${(e && (e.message || e.name)) || e}`, true); $("kbBtn").hidden = false;
   }
 }
 // 一度準備した端末では、起動時に裏で読み込んでおく
