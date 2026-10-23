@@ -111,6 +111,9 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   .arow{padding:9px 12px}
 }
 
+/* iPad 縦 */
+@media (min-width:700px) and (orientation:portrait){ .cam{aspect-ratio:32/9} }
+
 /* iPad 横 */
 @media (min-width:900px) and (orientation:landscape){
   .wrap{max-width:none;display:grid;grid-template-columns:minmax(320px,38%) minmax(0,1fr);gap:20px;align-items:start;
@@ -119,7 +122,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   .side{display:flex;flex-direction:column;gap:12px;position:sticky;top:max(16px,env(safe-area-inset-top,0px))}
   .foot{order:0;margin-top:8px}
   #result{order:0;min-width:0}
-  .cam{aspect-ratio:4/3}
+  .cam{aspect-ratio:8/3}
   .card{padding:22px 24px;gap:16px}
   .name{font-size:28px}
   .jan{font-size:22px}
@@ -172,7 +175,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <button class="btn" id="kbBtn" type="button" hidden>キーボードのマイクで話す</button>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v2.9</span></span>
+    <span><span id="info"></span> <span id="ver">v3.0</span></span>
     <span class="footbtns"><button class="btn" id="pick" type="button">データ読込</button></span>
   </div>
  </div>
