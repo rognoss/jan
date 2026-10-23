@@ -37,6 +37,9 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 .btn{font:700 15px var(--f-body);padding:10px 14px;border-radius:8px;border:1px solid var(--line);
   background:var(--surface);color:var(--ink);cursor:pointer;white-space:nowrap}
 .btn.main{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.okbar{background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:20px;text-align:center;border-radius:8px;padding:10px;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.6}}
+@media (prefers-reduced-motion: reduce){.okbar{animation:none}}
 .status{font-size:13px;color:var(--muted);min-height:1.4em;margin:0}
 .status.err{color:var(--warn);font-weight:700}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px}
@@ -72,6 +75,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
     <button class="btn main" id="camBtn" type="button">読む</button>
     <button class="btn" id="micBtn" type="button" aria-label="音声入力">音声</button>
   </div>
+  <div class="okbar" id="okBanner" hidden>OK 話してください</div>
   <p class="status" id="status"></p>
 
   <section id="result"></section>
@@ -284,20 +288,47 @@ function spokenToQuery(t) {
   while (rest) { const m = keys.find(x => rest.startsWith(x)); if (m) { out += k[m]; rest = rest.slice(m.length); } else if (/^[0-9]/.test(rest)) { out += rest[0]; rest = rest.slice(1); } else { out = null; break; } }
   return out && out.length >= 4 ? out : t.trim();
 }
+function okTone() {
+  if (!ac) return;
+  try {
+    for (const [f, at] of [[880, 0], [1320, 0.09]]) {
+      const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + at;
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.18, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.12);
+    }
+  } catch (e) {}
+}
+function micUi(on) {
+  $("micBtn").classList.toggle("main", on);
+  $("micBtn").textContent = on ? "OK" : "音声";
+  $("okBanner").hidden = !on;
+}
 $("micBtn").onclick = () => {
   unlockSound();
-  if (!SR) { $("q").focus(); status("キーボードのマイクで話してください"); return; }
   if (rec) { rec.stop(); return; }
+  if (!SR) { okTone(); status("OK キーボードのマイクで話してください"); $("q").value = ""; $("q").focus(); return; }
   rec = new SR(); rec.lang = "ja-JP"; rec.interimResults = true; rec.maxAlternatives = 1;
-  $("micBtn").classList.add("main"); status("話してください");
+  let heard = false;
+  rec.onstart = () => { okTone(); micUi(true); status(""); };
   rec.onresult = e => {
+    heard = true;
     const r = e.results[e.results.length - 1], t = r[0].transcript;
     $("q").value = t;
     if (r.isFinal) { const q = spokenToQuery(t); $("q").value = q; beep(show(q)); }
   };
-  rec.onerror = e => { if (e.error === "not-allowed" || e.error === "service-not-allowed") status("マイクを使えません。設定でマイクと音声認識を許可してください", true); };
-  rec.onend = () => { rec = null; $("micBtn").classList.remove("main"); if ($("status").textContent === "話してください") status(""); };
-  try { rec.start(); } catch (e) { rec = null; $("micBtn").classList.remove("main"); }
+  rec.onerror = e => {
+    const msg = {
+      "not-allowed": "マイクが許可されていません。設定でSafariのマイクを許可してください",
+      "service-not-allowed": "音声認識が使えません。設定でSiriと音声入力をオンにしてください",
+      "no-speech": "声が聞き取れませんでした。もう一度押して話してください",
+      "audio-capture": "マイクが見つかりません",
+      "network": "通信できないため音声認識が使えません"
+    }[e.error] || `音声認識エラー(${e.error})`;
+    status(msg, true);
+  };
+  rec.onend = () => { rec = null; micUi(false); };
+  try { rec.start(); } catch (e) { rec = null; micUi(false); status("音声認識を開始できません。キーボードのマイクで話してください", true); $("q").focus(); }
 };
 
 /* ---- データ読込 ---- */
