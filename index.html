@@ -82,7 +82,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v1.6</span></span>
+    <span><span id="info"></span> <span id="ver">v1.7</span></span>
     <button class="btn" id="pick" type="button">データ読込</button>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
@@ -293,7 +293,7 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) { if 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 function spokenToQuery(t) {
-  const k = { "〇": "0", "零": "0", "ゼロ": "0", "まる": "0", "一": "1", "いち": "1", "二": "2", "に": "2", "三": "3", "さん": "3", "四": "4", "よん": "4", "し": "4", "五": "5", "ご": "5", "六": "6", "ろく": "6", "七": "7", "なな": "7", "しち": "7", "八": "8", "はち": "8", "九": "9", "きゅう": "9", "く": "9" };
+  const k = { "〇": "0", "零": "0", "ゼロ": "0", "ぜろ": "0", "れい": "0", "まる": "0", "ごう": "5", "ゴー": "5", "一": "1", "いち": "1", "二": "2", "に": "2", "三": "3", "さん": "3", "四": "4", "よん": "4", "し": "4", "五": "5", "ご": "5", "六": "6", "ろく": "6", "七": "7", "なな": "7", "しち": "7", "八": "8", "はち": "8", "九": "9", "きゅう": "9", "く": "9" };
   // 英語の音声入力(USキーボード): "four five four zero ..." / "oh" / "double five"
   const en = { zero: "0", oh: "0", o: "0", one: "1", two: "2", to: "2", too: "2", three: "3", four: "4", for: "4", five: "5", six: "6", seven: "7", eight: "8", ate: "8", nine: "9" };
   const words = t.normalize("NFKC").toLowerCase().replace(/[,.\-]/g, " ").split(/\s+/).filter(Boolean);
@@ -335,6 +335,7 @@ let kbDict = false;
 $("micBtn").onclick = () => {
   unlockSound();
   if (rec) { rec.stop(); return; }
+  if (standalone) { localVoice(); return; }
   if (!SR) { keyboardDictation(); return; }
   // 日本語(ja-JP)で聞き取る。キーボードの言語には関係しない
   rec = new SR(); rec.lang = "ja-JP"; rec.interimResults = true; rec.maxAlternatives = 1;
@@ -367,6 +368,83 @@ $("micBtn").onclick = () => {
   try { rec.start(); } catch (e) { clearTimeout(watchdog); fail("音声認識を開始できません"); }
 };
 $("kbBtn").onclick = () => { $("kbBtn").hidden = true; status(""); keyboardDictation(); };
+
+/* ---- ホーム画面用:iPadの中で日本語の音声を文字にする(Whisper) ---- */
+let asr = null, asrLoading = null, vRec = null;
+function setBanner(t) { $("okBanner").textContent = t; $("okBanner").hidden = !t; }
+async function getAsr() {
+  if (asr) return asr;
+  if (!asrLoading) asrLoading = (async () => {
+    const T = await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2");
+    T.env.allowLocalModels = false;
+    const prog = {};
+    const p = await T.pipeline("automatic-speech-recognition", "Xenova/whisper-base", {
+      progress_callback: e => {
+        if (e.status === "progress" && e.total) {
+          prog[e.file] = [e.loaded, e.total];
+          const v = Object.values(prog), l = v.reduce((a, x) => a + x[0], 0), t = v.reduce((a, x) => a + x[1], 0);
+          if (!vRec) setBanner(`音声の準備中 ${Math.floor(l / t * 100)}%(初回だけ)`);
+        }
+      }
+    });
+    try { localStorage.setItem("jan.asr", "1"); } catch (e) {}
+    asr = p; return p;
+  })().catch(e => { asrLoading = null; throw e; });
+  return asrLoading;
+}
+async function toMono16k(chunks, rate) {
+  const len = chunks.reduce((a, c) => a + c.length, 0), all = new Float32Array(len);
+  let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
+  if (rate === 16000) return all;
+  const oc = new OfflineAudioContext(1, Math.ceil(len * 16000 / rate), 16000);
+  const b = oc.createBuffer(1, len, rate); b.copyToChannel(all, 0);
+  const src = oc.createBufferSource(); src.buffer = b; src.connect(oc.destination); src.start();
+  return (await oc.startRendering()).getChannelData(0);
+}
+async function localVoice() {
+  if (vRec) { vRec.stop(); return; }
+  unlockSound();
+  let ms;
+  try { ms = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch (e) { status("マイクを使えません。設定でマイクを許可してください", true); $("kbBtn").hidden = false; return; }
+  const model = getAsr();                       // 録音と並行して準備
+  model.catch(() => {});
+  const ctx = ac || new (window.AudioContext || window.webkitAudioContext)();
+  ac = ctx; if (ctx.state === "suspended") await ctx.resume();
+  const src = ctx.createMediaStreamSource(ms), node = ctx.createScriptProcessor(4096, 1, 1);
+  const chunks = []; let spoke = false, quietSince = 0; const t0 = Date.now();
+  let done;
+  const finished = new Promise(r => done = r);
+  vRec = { stop: () => done() };
+  node.onaudioprocess = e => {
+    const d = new Float32Array(e.inputBuffer.getChannelData(0)); chunks.push(d);
+    let sum = 0; for (let i = 0; i < d.length; i += 4) sum += d[i] * d[i];
+    const rms = Math.sqrt(sum / (d.length / 4)), now = Date.now();
+    if (rms > 0.02) { spoke = true; quietSince = 0; } else if (spoke && !quietSince) quietSince = now;
+    if ((spoke && quietSince && now - quietSince > 1000) || now - t0 > 10000) done();   // 黙って1秒で終了、最長10秒
+  };
+  src.connect(node); node.connect(ctx.destination);
+  okTone(); micUi(true); $("micBtn").textContent = "停止"; setBanner("OK 話してください"); status("");
+  await finished;
+  node.disconnect(); src.disconnect(); ms.getTracks().forEach(t => t.stop());
+  vRec = null; micUi(false);
+  if (!spoke) { setBanner(""); status("声が聞き取れませんでした。もう一度押して話してください", true); return; }
+  setBanner("文字にしています…");
+  try {
+    const audio = await toMono16k(chunks, ctx.sampleRate);
+    const p = await model;
+    setBanner("文字にしています…");
+    const out = await p(audio, { language: "japanese", task: "transcribe" });
+    setBanner("");
+    const t = (out.text || "").replace(/[。、]$/, "").trim();
+    if (!t) { status("聞き取れませんでした。もう一度話してください", true); return; }
+    const q = spokenToQuery(t); $("q").value = q; beep(show(q));
+  } catch (e) {
+    setBanner(""); status("音声の準備に失敗しました。通信を確認してもう一度押してください", true); $("kbBtn").hidden = false;
+  }
+}
+// 一度準備した端末では、起動時に裏で読み込んでおく
+try { if (standalone && localStorage.getItem("jan.asr")) setTimeout(() => getAsr().catch(() => {}), 1500); } catch (e) {}
 
 /* ---- データ読込 ---- */
 $("pick").onclick = () => $("file").click();
