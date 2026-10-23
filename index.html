@@ -75,6 +75,18 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 .lockmsg{font-size:13px;color:var(--warn);margin:0;min-height:1.2em;text-align:center}
 .linkbtn{background:none;border:0;color:var(--muted);font:13px var(--f-body);text-decoration:underline;cursor:pointer}
 .footbtns{display:flex;gap:6px}
+.area{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.areahead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:12px 14px;background:var(--soft);flex-wrap:wrap}
+.areatitle{font-size:20px;font-weight:700;color:var(--accent)}
+.areasum{font:600 14px var(--f-num);color:var(--muted)}
+.arealist{display:flex;flex-direction:column}
+.arow{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:baseline;text-align:left;width:100%;
+  background:var(--surface);color:var(--ink);border:0;border-top:1px solid var(--line);padding:10px 14px;font:15px var(--f-body);cursor:pointer}
+.arow .aj{font:600 14px var(--f-num);color:var(--muted)}
+.arow .an{overflow-wrap:anywhere}
+.arow .an em{font-style:normal;font:600 13px var(--f-num);color:var(--accent);margin-left:8px}
+.arow .aq{font:700 20px var(--f-num);font-variant-numeric:tabular-nums;text-align:right;min-width:3ch}
+@media (max-width:420px){.arow{grid-template-columns:minmax(0,1fr) auto}.arow .aj{grid-column:1/-1}}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -111,7 +123,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v2.6</span></span>
+    <span><span id="info"></span> <span id="ver">v2.8</span></span>
     <span class="footbtns"><button class="btn" id="pick" type="button">データ読込</button></span>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
@@ -182,8 +194,91 @@ function card(r) {
     <div class="grid">${cells}</div>
   </article>`;
 }
+/* ---- 場所で探す(パレット・倉庫・専用棚) ---- */
+const WAREHOUSES = [
+  { name: "旭",     alias: ["旭", "あさひ", "アサヒ"] },
+  { name: "新柏",   alias: ["新柏", "しんかしわ", "シンカシワ"] },
+  { name: "DPモエレ", alias: ["DPモエレ", "ディーピーモエレ", "でぃーぴーもえれ", "DPもえれ", "モエレ", "もえれ"] },
+  { name: "DP仙台", alias: ["DP仙台", "ディーピー仙台", "でぃーぴー仙台", "DPせんだい", "仙台", "せんだい"] }
+];
+function kanjiNum(t) {        // 四十六 → 46、百二十 → 120
+  const d = { "〇": 0, "零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9 };
+  return t.replace(/[〇零一二三四五六七八九十百千]+/g, m => {
+    if (!/[十百千]/.test(m)) return m.split("").map(c => d[c]).join("");
+    let total = 0, cur = 0;
+    for (const c of m) {
+      if (c in d) cur = d[c];
+      else { const u = { "十": 10, "百": 100, "千": 1000 }[c]; total += (cur || 1) * u; cur = 0; }
+    }
+    return String(total + cur);
+  });
+}
+const colOf = re => headers.find(k => re.test(k));
+function areaQuery(q) {
+  const n = kanjiNum(q.normalize("NFKC").replace(/[\s　、。・]/g, "")).toUpperCase();
+  let m = n.match(/^(パレット|ぱれっと|PALLET|P)(?:番号)?([0-9]+)?(?:番)?$/);
+  if (m) return { type: "pallet", no: m[2] || "" };
+  if (/^(専用|専用棚|せんよう|センヨウ|せんようだな)$/.test(n)) return { type: "senyo" };
+  for (const w of WAREHOUSES) if (w.alias.some(a => a.normalize("NFKC").toUpperCase() === n)) return { type: "wh", wh: w };
+  return null;
+}
+function areaRows(a) {
+  const out = [], nameK = "商品名", jk = janKey();
+  const push = (r, place, qty) => out.push({ r, jan: r[jk], name: r[nameK] || "", place, qty });
+  if (a.type === "pallet") {
+    const col = colOf(/パレット/); if (!col) return { out, title: "パレットの列がありません" };
+    for (const r of rows) {
+      const v = (r[col] || "").normalize("NFKC");
+      for (const t of v.matchAll(/P\s*([0-9]+)\s*[:：]?\s*([0-9]+)?/gi))
+        if (!a.no || String(+t[1]) === String(+a.no)) push(r, "P" + t[1], t[2] || "");
+    }
+    return { out, title: a.no ? `パレット P${a.no}` : "パレット 全部", showPlace: !a.no };
+  }
+  if (a.type === "senyo") {
+    const col = colOf(/専用/); if (!col) return { out, title: "専用棚の列がありません" };
+    for (const r of rows) {
+      const v = (r[col] || "").normalize("NFKC").trim(); if (!v) continue;
+      const toks = [...v.matchAll(/([^0-9\s]+)\s*([0-9]+)/g)];
+      if (toks.length) for (const t of toks) push(r, t[1], t[2]); else push(r, v, "");
+    }
+    return { out, title: "専用棚", showPlace: true };
+  }
+  const w = a.wh, key = w.name.normalize("NFKC").toUpperCase();
+  const col = colOf(/倉庫/);
+  for (const r of rows) {
+    const cells = col ? [r[col]] : headers.map(k => r[k]);
+    for (const c of cells) {
+      const v = (c || "").normalize("NFKC").toUpperCase().replace(/\s+/g, "");
+      let i = v.indexOf(key);
+      while (i >= 0) {
+        const rest = v.slice(i + key.length), mm = rest.match(/^[:：]?([0-9]+)/);
+        if (mm && !(w.name === "旭" && false)) push(r, w.name, mm[1]);
+        else if (!/^[0-9:：]/.test(rest)) push(r, w.name, "");
+        i = v.indexOf(key, i + key.length);
+      }
+    }
+  }
+  return { out, title: `倉庫 ${w.name}` };
+}
+function showArea(a) {
+  const { out, title, showPlace } = areaRows(a);
+  if (!out.length) { $("result").innerHTML = ""; status(`${title} 該当なし`, true); return false; }
+  const sum = out.reduce((t, x) => t + (+x.qty || 0), 0);
+  const MAX = 500;
+  $("result").innerHTML = `<div class="area">
+    <div class="areahead"><span class="areatitle">${esc(title)}</span><span class="areasum">${out.length.toLocaleString()}件 計${sum.toLocaleString()}</span></div>
+    <div class="arealist">${out.slice(0, MAX).map((x, i) => `<button class="arow" data-i="${i}" type="button">
+      <span class="aj">${esc(x.jan)}</span><span class="an">${esc(x.name)}${showPlace ? `<em>${esc(x.place)}</em>` : ""}</span><span class="aq">${esc(x.qty)}</span></button>`).join("")}</div>
+    ${out.length > MAX ? `<p class="status">先頭${MAX}件を表示しています</p>` : ""}
+  </div>`;
+  $("result").querySelectorAll(".arow").forEach(b => b.onclick = () => { $("result").innerHTML = card(out[+b.dataset.i].r); });
+  status("");
+  return true;
+}
+
 function show(q) {
   if (!rows.length) { status("データ読込から在庫ファイルを入れてください", true); return false; }
+  const a = areaQuery(q); if (a) return showArea(a);
   const hits = find(q);
   if (!hits.length) { $("result").innerHTML = ""; status(`${q} 該当なし`, true); return false; }
   if (hits.length === 1) { $("result").innerHTML = card(hits[0]); status(""); return true; }
@@ -210,7 +305,8 @@ $("q").addEventListener("input", () => {
   const d = spokenToQuery($("q").value);
   const quick = (/^[0-9]{13}$/.test(d) && eanOk(d) && inData(d)) ||
                 (/^[0-9]{6}$/.test(d) && rows.filter(r => digits(r[janKey()]).endsWith(d)).length === 1);
-  if (quick) { typeTimer = setTimeout(go, 400); return; }  // JAN13けた・下6けたで1件に決まったらすぐ
+  if (quick) { typeTimer = setTimeout(go, 400); return; }
+  if (areaQuery($("q").value)) { typeTimer = setTimeout(go, 1500); return; }  // JAN13けた・下6けたで1件に決まったらすぐ
   typeTimer = setTimeout(go, 3500);   // それ以外は話が止まって3.5秒後
 });
 $("q").addEventListener("blur", () => { if (kbDict && !$("q").value.trim()) { kbDict = false; $("okBanner").hidden = true; } });
