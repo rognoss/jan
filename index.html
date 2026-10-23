@@ -98,7 +98,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 
   <div class="row">
     <div class="qbox">
-      <input id="q" inputmode="numeric" enterkeyhint="search" placeholder="JAN" autocomplete="off">
+      <input id="q" inputmode="text" enterkeyhint="search" placeholder="JAN" autocomplete="off">
       <button class="clr" id="clrBtn" type="button" aria-label="消去" hidden>×</button>
     </div>
     <button class="btn main" id="camBtn" type="button">読む</button>
@@ -111,7 +111,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v2.4</span></span>
+    <span><span id="info"></span> <span id="ver">v2.6</span></span>
     <span class="footbtns"><button class="btn" id="pick" type="button">データ読込</button></span>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
@@ -122,7 +122,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 const $ = id => document.getElementById(id);
 const status = (t, err) => { $("status").textContent = t || ""; $("status").className = "status" + (err ? " err" : ""); };
 const digits = s => (s || "").replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[^0-9]/g, "");
-const clean = v => { v = (v || "").trim(); const m = v.match(/^[^：:]{1,8}[：:]\s*(.*)$/); return m ? m[1].trim() : v; };
+const clean = (v, k) => { v = (v || "").trim(); if (k) { for (const p of [k + "：", k + ":"]) if (v.startsWith(p)) return v.slice(p.length).trim(); } return v; };   // 「出荷数：10」→「10」。「P46：10」はそのまま
 let headers = [], rows = [];
 
 /* ---- 端末内保存(IndexedDB) ---- */
@@ -142,7 +142,7 @@ function parse(text) {
   const sep = lines[0].includes("\t") ? "\t" : ",";
   const split = l => sep === "\t" ? l.split("\t") : (l.match(/("([^"]|"")*"|[^,]*)(,|$)/g) || []).map(s => s.replace(/,$/, "").replace(/^"|"$/g, "").replace(/""/g, '"'));
   headers = split(lines[0]).map(s => s.trim());
-  rows = lines.slice(1).map(split).map(cols => { const o = {}; headers.forEach((k, i) => o[k] = clean(cols[i])); return o; });
+  rows = lines.slice(1).map(split).map(cols => { const o = {}; headers.forEach((k, i) => o[k] = clean(cols[i], k)); return o; });
 }
 const janKey = () => headers.find(k => /JAN/i.test(k)) || headers[0];
 function setInfo(meta) {
@@ -156,6 +156,10 @@ function find(q) {
     const z = d.replace(/^0+/, "");
     const exact = rows.filter(r => digits(r[jk]).replace(/^0+/, "") === z);
     return exact.length ? exact : rows.filter(r => digits(r[jk]).includes(d));
+  }
+  if (d.length >= 4 && d === q.normalize("NFKC").replace(/[\s\-]/g, "")) {   // 数字だけ4〜7けた → JANの下けた
+    const tail = rows.filter(r => digits(r[jk]).endsWith(d));
+    if (tail.length) return tail;
   }
   const s = q.trim().toLowerCase().normalize("NFKC");
   if (!s) return [];
@@ -190,19 +194,26 @@ function show(q) {
   status(`${hits.length}件`);
   return true;
 }
-$("q").onfocus = unlockSound;
+$("q").onfocus = () => { unlockSound(); kbDict = true; };
 let typeTimer = null;
 $("q").addEventListener("input", () => {
   if (!kbDict) return;
   clearTimeout(typeTimer);
-  typeTimer = setTimeout(() => {
+  const go = () => {
     const t = $("q").value; if (!t.trim()) return;
     const q = spokenToQuery(t); $("q").value = q;
-    kbDict = false; $("okBanner").hidden = true;
-    beep(show(q)); $("q").blur();
-  }, 1200);
+    $("okBanner").hidden = true;
+    beep(show(q));
+    try { $("q").select(); } catch (e) {}          // 次に話した言葉で置き換わる
+    $("result").scrollIntoView({ block: "nearest" });
+  };
+  const d = spokenToQuery($("q").value);
+  const quick = (/^[0-9]{13}$/.test(d) && eanOk(d) && inData(d)) ||
+                (/^[0-9]{6}$/.test(d) && rows.filter(r => digits(r[janKey()]).endsWith(d)).length === 1);
+  if (quick) { typeTimer = setTimeout(go, 400); return; }  // JAN13けた・下6けたで1件に決まったらすぐ
+  typeTimer = setTimeout(go, 3500);   // それ以外は話が止まって3.5秒後
 });
-$("q").addEventListener("blur", () => { $("q").setAttribute("inputmode", "numeric"); if (kbDict && !$("q").value.trim()) { kbDict = false; $("okBanner").hidden = true; } });
+$("q").addEventListener("blur", () => { if (kbDict && !$("q").value.trim()) { kbDict = false; $("okBanner").hidden = true; } });
 $("q").onkeydown = e => { if (e.key === "Enter") { clearTimeout(typeTimer); kbDict = false; $("okBanner").hidden = true; const q = spokenToQuery($("q").value); $("q").value = q; beep(show(q)); $("q").blur(); } };
 
 /* ---- 音 ---- */
@@ -356,7 +367,7 @@ function micUi(on) {
 }
 const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 function keyboardDictation() {
-  okTone(); $("q").value = ""; $("q").blur(); $("q").setAttribute("inputmode", "text"); $("q").focus();
+  okTone(); $("q").value = ""; $("q").focus();
   $("okBanner").textContent = "OK キーボードのマイクを押して話してください"; $("okBanner").hidden = false;
   kbDict = true;
 }
@@ -378,11 +389,17 @@ $("micBtn").onclick = () => {
   };
   const watchdog = setTimeout(() => { if (!started) fail("音声認識が始まりません"); }, 2000);
   rec.onstart = () => { started = true; clearTimeout(watchdog); okTone(); micUi(true); status(""); $("kbBtn").hidden = true; };
+  rec.continuous = true;
+  let silence = null;
+  const finish = () => { try { rec && rec.stop(); } catch (e) {} };
   rec.onresult = e => {
-    const r = e.results[e.results.length - 1], t = r[0].transcript;
+    let t = ""; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
     $("q").value = t;
-    if (r.isFinal) { const q = spokenToQuery(t); $("q").value = q; beep(show(q)); }
+    clearTimeout(silence);
+    const d = spokenToQuery(t);
+    silence = setTimeout(finish, /^[0-9]{13}$/.test(d) && eanOk(d) ? 300 : 3000);
   };
+  const origEnd = () => { clearTimeout(silence); const t = $("q").value; if (t.trim()) { const q = spokenToQuery(t); $("q").value = q; beep(show(q)); } };
   rec.onerror = e => {
     clearTimeout(watchdog);
     if (e.error === "no-speech") { status("声が聞き取れませんでした。もう一度押して話してください", true); return; }
@@ -394,7 +411,7 @@ $("micBtn").onclick = () => {
       "network": "通信できないため音声認識が使えません"
     }[e.error] || `音声認識エラー(${e.error})`);
   };
-  rec.onend = () => { clearTimeout(watchdog); rec = null; micUi(false); };
+  rec.onend = () => { clearTimeout(watchdog); const was = started; rec = null; micUi(false); if (was) origEnd(); };
   try { rec.start(); } catch (e) { clearTimeout(watchdog); fail("音声認識を開始できません"); }
 };
 $("kbBtn").onclick = () => { $("kbBtn").hidden = true; status(""); keyboardDictation(); };
