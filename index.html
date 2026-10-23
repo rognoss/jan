@@ -32,6 +32,9 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
 .cam video{width:100%;height:100%;object-fit:cover;display:block}
 .cam::after{content:"";position:absolute;left:8%;right:8%;top:50%;height:2px;background:#ff5a3c;box-shadow:0 0 8px #ff5a3c}
 .row{display:flex;gap:8px}
+.qbox{position:relative;flex:1;min-width:0;display:flex}
+.qbox input{padding-right:48px!important}
+.clr{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:40px;height:40px;border:0;border-radius:50%;background:var(--line);color:var(--ink);font:700 22px/1 var(--f-body);cursor:pointer}
 .row input{flex:1;min-width:0;font:600 18px var(--f-num);padding:12px;border:1px solid var(--line);
   border-radius:8px;background:var(--surface);color:var(--ink)}
 .btn{font:700 15px var(--f-body);padding:10px 14px;border-radius:8px;border:1px solid var(--line);
@@ -71,7 +74,10 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <div class="cam" id="cam" hidden><video id="video" playsinline muted autoplay></video></div>
 
   <div class="row">
-    <input id="q" inputmode="numeric" enterkeyhint="search" placeholder="JAN" autocomplete="off">
+    <div class="qbox">
+      <input id="q" inputmode="numeric" enterkeyhint="search" placeholder="JAN" autocomplete="off">
+      <button class="clr" id="clrBtn" type="button" aria-label="消去" hidden>×</button>
+    </div>
     <button class="btn main" id="camBtn" type="button">読む</button>
     <button class="btn" id="micBtn" type="button" aria-label="音声入力">音声</button>
   </div>
@@ -82,7 +88,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warn);outline-o
   <section id="result"></section>
 
   <div class="foot">
-    <span><span id="info"></span> <span id="ver">v1.8</span></span>
+    <span><span id="info"></span> <span id="ver">v2.0</span></span>
     <button class="btn" id="pick" type="button">データ読込</button>
   </div>
   <input type="file" id="file" accept=".txt,.tsv,.csv,text/plain,text/csv,text/tab-separated-values" hidden>
@@ -335,7 +341,8 @@ let kbDict = false;
 $("micBtn").onclick = () => {
   unlockSound();
   if (rec) { rec.stop(); return; }
-  if (standalone) { localVoice(); return; }
+  let srDead = false; try { srDead = localStorage.getItem("jan.srdead") === "1"; } catch (e) {}
+  if (standalone && (!SR || srDead)) { localVoice(); return; }
   if (!SR) { keyboardDictation(); return; }
   // 日本語(ja-JP)で聞き取る。キーボードの言語には関係しない
   rec = new SR(); rec.lang = "ja-JP"; rec.interimResults = true; rec.maxAlternatives = 1;
@@ -343,6 +350,7 @@ $("micBtn").onclick = () => {
   const fail = msg => {
     try { rec && rec.abort(); } catch (e) {}
     rec = null; micUi(false);
+    if (standalone && !started) { try { localStorage.setItem("jan.srdead", "1"); } catch (e) {} status(""); localVoice(); return; }
     status(msg + (standalone ? "。Safariで開くと使えます" : ""), true);
     $("kbBtn").hidden = false;
   };
@@ -370,16 +378,19 @@ $("micBtn").onclick = () => {
 $("kbBtn").onclick = () => { $("kbBtn").hidden = true; status(""); keyboardDictation(); };
 
 /* ---- ホーム画面用:iPadの中で日本語の音声を文字にする(Whisper) ---- */
-let asr = null, asrLoading = null, vRec = null;
+let asr = null, asrLoading = null, vRec = null, stageNote = "";
 function setBanner(t) { $("okBanner").textContent = t; $("okBanner").hidden = !t; }
 async function getAsr() {
   if (asr) return asr;
   if (!asrLoading) asrLoading = (async () => {
-    const T = await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2");
+    stageNote = "ライブラリ読込";
+    const T = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/dist/transformers.min.js");
     T.env.allowLocalModels = false;
-    try { T.env.backends.onnx.wasm.numThreads = 1; T.env.backends.onnx.wasm.proxy = false; } catch (e) {}
+    try { T.env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
+    stageNote = "モデル読込";
     const prog = {};
     const p = await T.pipeline("automatic-speech-recognition", "Xenova/whisper-base", {
+      device: "wasm", dtype: "q8",
       progress_callback: e => {
         if (e.status === "progress" && e.total) {
           prog[e.file] = [e.loaded, e.total];
@@ -448,11 +459,22 @@ async function localVoice() {
     const q = spokenToQuery(t); $("q").value = q; beep(show(q));
   } catch (e) {
     setBanner(""); asrLoading = asr ? asrLoading : null;
-    status(`${stage}で失敗しました:${(e && (e.message || e.name)) || e}`, true); $("kbBtn").hidden = false;
+    const where = stage.startsWith("音声の準備") && stageNote ? `${stage}/${stageNote}` : stage;
+    const first = e && e.stack ? String(e.stack).split("\n")[0].slice(0, 120) : "";
+    status(`${where}で失敗しました:${(e && (e.message || e.name)) || e}${first ? " [" + first + "]" : ""}`, true); $("kbBtn").hidden = false;
   }
 }
 // 一度準備した端末では、起動時に裏で読み込んでおく
 try { if (standalone && localStorage.getItem("jan.asr")) setTimeout(() => getAsr().catch(() => {}), 1500); } catch (e) {}
+
+/* ---- 消去ボタン ---- */
+const syncClr = () => { $("clrBtn").hidden = !$("q").value; };
+$("q").addEventListener("input", syncClr);
+setInterval(syncClr, 300);   // 読み取り・音声で値が入ったときも表示
+$("clrBtn").onclick = () => {
+  $("q").value = ""; $("result").innerHTML = ""; status(""); syncClr();
+  last = ""; lastAt = 0;      // 同じ商品をすぐ読み直せるように
+};
 
 /* ---- データ読込 ---- */
 $("pick").onclick = () => $("file").click();
